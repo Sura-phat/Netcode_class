@@ -4,18 +4,78 @@ using Unity.Netcode;
 using UnityEngine;
 using QFSW.QC;
 using TMPro;
+using System;
 
 public class LoginManager : MonoBehaviour
 {
-
+    public TMP_InputField characterIdInputField;
+    public List<uint> AlternativePlayerPrefabs;
     public TMP_InputField userNameInputField;
     public bool isApproveConnection = false;
     [Command("set-approve")]
-
     public bool SetIsApproveConnection()
     {
         isApproveConnection = !isApproveConnection;
         return isApproveConnection;
+    }
+
+    public GameObject loginPanel;
+    public GameObject leaveButton;
+    //public GameObject ;
+    public void Start()
+    {
+        NetworkManager.Singleton.OnServerStarted += HandleServerStarted;
+        NetworkManager.Singleton.OnClientConnectedCallback += HandleClientConnected;
+        NetworkManager.Singleton.OnClientDisconnectCallback += HandleClientDisconnect;
+        loginPanel.SetActive(true);
+        leaveButton.SetActive(false);
+    }
+
+    public void Leave()
+    {
+        if (NetworkManager.Singleton.IsHost)
+        {
+            NetworkManager.Singleton.Shutdown();//shutdown
+            NetworkManager.Singleton.ConnectionApprovalCallback -= ApprovalCheck;
+        }    
+        else if (NetworkManager.Singleton.IsClient) 
+        {
+            NetworkManager.Singleton.Shutdown(); //shutdown
+        }
+
+        // show login panal
+        loginPanel.SetActive(true);
+        // show leave button
+        leaveButton.SetActive(false);
+    }
+
+    private void HandleClientDisconnect(ulong clientId)
+    {
+        Debug.Log("HandleClientDisconnect " + clientId);
+        if (NetworkManager.Singleton.IsHost) { }
+        else if (NetworkManager.Singleton.IsClient) { Leave(); }
+    }
+    private void HandleClientConnected(ulong clientId)
+    {
+        Debug.Log("HandleClientConnected " + clientId);
+        if (clientId == NetworkManager.Singleton.LocalClientId)
+        {
+            loginPanel.SetActive(false);
+            leaveButton.SetActive(true);
+        }
+    }
+    private void HandleServerStarted()
+    {
+        Debug.Log("HandleServerStarted ");
+    }
+
+    private void OnDestroy()
+    {
+        if (NetworkManager.Singleton == null) { return; }
+        NetworkManager.Singleton.OnServerStarted -= HandleServerStarted;
+        NetworkManager.Singleton.OnClientConnectedCallback -= HandleClientConnected;
+        NetworkManager.Singleton.OnClientDisconnectCallback -= HandleClientDisconnect;
+
     }
     public void Host()
     {
@@ -34,11 +94,33 @@ public class LoginManager : MonoBehaviour
 
         int bytelength = connectionData.Length;
         bool isApproved = false;
+        int characterPrefabIndex = 0;
         if (bytelength > 0) 
         {
-            string clientData = System.Text.Encoding.ASCII.GetString(connectionData , 0, bytelength);
-            string hostData = userNameInputField.GetComponent<TMP_InputField>().text;
-            isApproved = ApproveConnection(clientData, hostData);
+            string combinedString = System.Text.Encoding.ASCII.GetString(connectionData , 0 , bytelength);
+            string[] extractedStrings = HelperScript.ExtractStrings(combinedString);
+            for (int i = 0; i < extractedStrings.Length; i++)
+            {
+                if (i == 0)
+                {
+                    string clientData = extractedStrings[i];
+                    string hostData = userNameInputField.GetComponent<TMP_InputField>().text;
+                    isApproved = ApproveConnection(clientData, hostData);
+                }
+                else if (i == 1)
+                {
+                    characterPrefabIndex = int.Parse(extractedStrings[i]);
+                }
+            }
+        }
+        else
+        {
+            //Sever
+            if (NetworkManager.Singleton.IsHost)
+            {
+                string characterId = characterIdInputField.GetComponent<TMP_InputField>().text;
+                characterPrefabIndex = int.Parse(characterId);
+            }
         }
 
         // Your approval logic determines the following values
@@ -46,13 +128,19 @@ public class LoginManager : MonoBehaviour
         response.CreatePlayerObject = true;
 
         // The Prefab hash value of the NetworkPrefab, if null the default NetworkManager player Prefab is used
-        response.PlayerPrefabHash = null;
+        //response.PlayerPrefabHash = null;
+        //response.PlayerPrefabHash = 3917023287; //Blue
+        // response.PlayerPrefabHash = 3395561593; // Yellow
+        response.PlayerPrefabHash = AlternativePlayerPrefabs[characterPrefabIndex];
+
 
         // Position to spawn the player object (if null it uses default of Vector3.zero)
         response.Position = Vector3.zero;
 
         // Rotation to spawn the player object (if null it uses the default of Quaternion.identity)
         response.Rotation = Quaternion.identity;
+        setSpawnLocation(clientId, response);
+        NetworkLog.LogInfoServer("spawnPos of" + clientId + " is " + response.Position.ToString());
 
         // If response.Approved is false, you can provide a message that explains the reason why via ConnectionApprovalResponse.Reason
         // On the client-side, NetworkManager.DisconnectReason will be populated with this message via DisconnectReasonMessage
@@ -63,9 +151,39 @@ public class LoginManager : MonoBehaviour
         response.Pending = false;
     }
 
+    private void setSpawnLocation(ulong clientId, NetworkManager.ConnectionApprovalResponse response)
+    {
+        Vector3 spawnPos = Vector3.zero;
+        Quaternion spawnRot = Quaternion.identity;
+        //server
+        if (clientId == NetworkManager.Singleton.LocalClientId)
+        {
+            spawnPos = new Vector3(-2f, 0f, 0f); 
+            spawnRot = Quaternion.Euler(0f, 135f, 0f);
+        }
+        else
+        {
+            switch (NetworkManager.Singleton.ConnectedClients.Count)
+            {
+                case 1:
+                    spawnPos = new Vector3(0f, 0f, 0f);
+                    spawnRot = Quaternion.Euler(0f, 180f, 0f);
+                    break;
+                case 2:
+                    spawnPos = new Vector3(2f, 0f, 0f);
+                    spawnRot = Quaternion.Euler(0f, 225f, 0f);
+                    break;
+            }
+        }
+        response.Position = spawnPos;
+        response.Rotation = spawnRot;
+    }
     public void Client()
     {
         string userName = userNameInputField.GetComponent<TMP_InputField>().text; 
+        string characterId = characterIdInputField.GetComponent<TMP_InputField>().text;
+        string[] inputFields = { userName, characterId };
+        string clientData = HelperScript.CombineStrings(inputFields);
         NetworkManager.Singleton.NetworkConfig.ConnectionData = System.Text.Encoding.ASCII.GetBytes(userName);
         NetworkManager.Singleton.StartClient();
         Debug.Log("start client");
